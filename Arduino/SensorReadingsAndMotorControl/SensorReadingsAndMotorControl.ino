@@ -80,6 +80,10 @@ const unsigned long MOTOR_TIMEOUT_MS = 500UL;
 unsigned long lastMotorCmdMs         = 0;
 bool motorActive                     = false;  // track state for logging
 
+// Non-blocking serial command buffer
+char cmdBuf[64];
+uint8_t cmdIdx = 0;
+
 // Timing trackers
 unsigned long lastTDSSampleMs    = 0;
 unsigned long lastPhSampleMs     = 0;
@@ -327,40 +331,48 @@ void loop() {
     Serial.println();
   }
 
-  // ---- 4. Motor/Rudder Serial Control ----
-  if (Serial.available()) {
-    String line = Serial.readStringUntil('\n');
-    line.trim();
+  // ---- 4. Motor/Rudder Serial Control (non-blocking) ----
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n') {
+      cmdBuf[cmdIdx] = '\0';
+      cmdIdx = 0;
 
-    if (line.startsWith("DIR")) {
-      line.remove(0, 3);
+      String line = String(cmdBuf);
       line.trim();
 
-      int spaceIndex = line.indexOf(' ');
-      if (spaceIndex > 0) {
-        String xs = line.substring(0, spaceIndex);
-        String ys = line.substring(spaceIndex + 1);
+      if (line.startsWith("DIR")) {
+        line.remove(0, 3);
+        line.trim();
 
-        float x = xs.toFloat();   // throttle
-        float y = ys.toFloat();   // rudder
-        lastMotorCmdMs = millis();
+        int spaceIndex = line.indexOf(' ');
+        if (spaceIndex > 0) {
+          String xs = line.substring(0, spaceIndex);
+          String ys = line.substring(spaceIndex + 1);
 
-        if (fabs(x) >= deadzone) {
-          if (!motorActive) Serial.println(x > 0 ? "MOTOR:FWD" : "MOTOR:REV");
-          motorActive = true;
-        } else {
-          if (motorActive) Serial.println("MOTOR:STOP");
-          motorActive = false;
+          float x = xs.toFloat();   // throttle
+          float y = ys.toFloat();   // rudder
+          lastMotorCmdMs = millis();
+
+          if (fabs(x) >= deadzone) {
+            if (!motorActive) Serial.println(x > 0 ? "MOTOR:FWD" : "MOTOR:REV");
+            motorActive = true;
+          } else {
+            if (motorActive) Serial.println("MOTOR:STOP");
+            motorActive = false;
+          }
+
+          driveSingleMotor(x, y);
         }
-
-        driveSingleMotor(x, y);
+      } else if (line.startsWith("SPEED")) {
+        int val;
+        if (sscanf(line.c_str(), "SPEED %d", &val) == 1) {
+          maxPWM = map(val, 0, 100, 0, 255);
+        }
       }
-    } else if (line.startsWith("SPEED")) {
-      int val;
-      if (sscanf(line.c_str(), "SPEED %d", &val) == 1) {
-        maxPWM = map(val, 0, 100, 0, 255);
-      }
+      // Ignore unknown lines
+    } else if (c != '\r' && cmdIdx < sizeof(cmdBuf) - 1) {
+      cmdBuf[cmdIdx++] = c;
     }
-    // Ignore unknown lines
   }
 }
