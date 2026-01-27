@@ -75,6 +75,11 @@ const unsigned long PH_SAMPLE_INTERVAL_MS    = 20UL;    // ms
 const unsigned long REPORT_INTERVAL_MS       = 5000UL;  // 5 s
 const unsigned long TEMP_CONV_TIME_MS        = 750UL;   // DS18B20 max conv time
 
+// Motor watchdog
+const unsigned long MOTOR_TIMEOUT_MS = 500UL;
+unsigned long lastMotorCmdMs         = 0;
+bool motorActive                     = false;  // track state for logging
+
 // Timing trackers
 unsigned long lastTDSSampleMs    = 0;
 unsigned long lastPhSampleMs     = 0;
@@ -145,6 +150,7 @@ void driveSingleMotor(float x, float y) {
 // =================================================================
 void setup() {
   Serial.begin(9600);
+  Serial.setTimeout(100);  // reduce default 1s timeout for readStringUntil
 
   // Motor & Servo
   pinMode(RPWM, OUTPUT);
@@ -175,17 +181,19 @@ void setup() {
 
   // Accelerometer
   Wire.begin();
+  Wire.setWireTimeout(3000, true);  // 3ms timeout, reset on timeout
   if (!accel.begin()) {
-    Serial.println("No ADXL345 detected!");
-    while (1);
+    Serial.println("No ADXL345 detected! Continuing without accelerometer.");
+  } else {
+    accel.setRange(ADXL345_RANGE_2_G);
   }
-  accel.setRange(ADXL345_RANGE_2_G);
 
   // Timing
   unsigned long now = millis();
-  lastTDSSampleMs = now;
-  lastPhSampleMs  = now;
-  lastReportMs    = now;
+  lastTDSSampleMs  = now;
+  lastPhSampleMs   = now;
+  lastReportMs     = now;
+  lastMotorCmdMs   = now;
 
   // (Optional) comment this out if you don't want motor auto-test
   /*
@@ -214,7 +222,14 @@ void setup() {
 void loop() {
   unsigned long now = millis();
 
-  
+  // ---- Motor watchdog: auto-stop if no DIR command within timeout ----
+  if (now - lastMotorCmdMs > MOTOR_TIMEOUT_MS) {
+    if (motorActive) {
+      Serial.println("MOTOR:WATCHDOG_STOP");
+      motorActive = false;
+    }
+    stopMotor();
+  }
 
   // ---- Non-blocking DS18B20 handling ----
   if (now - lastTempConvStart >= TEMP_CONV_TIME_MS) {
@@ -328,6 +343,16 @@ void loop() {
 
         float x = xs.toFloat();   // throttle
         float y = ys.toFloat();   // rudder
+        lastMotorCmdMs = millis();
+
+        if (fabs(x) >= deadzone) {
+          if (!motorActive) Serial.println(x > 0 ? "MOTOR:FWD" : "MOTOR:REV");
+          motorActive = true;
+        } else {
+          if (motorActive) Serial.println("MOTOR:STOP");
+          motorActive = false;
+        }
+
         driveSingleMotor(x, y);
       }
     } else if (line.startsWith("SPEED")) {

@@ -56,6 +56,7 @@ def send_cmd(cmd: str):
     global arduino
     if arduino and arduino.is_open:
         try:
+            arduino.reset_output_buffer()
             arduino.write((cmd + "\n").encode("utf-8"))
         except Exception as e:
             print(f"❌ Failed to send '{cmd}' to Arduino: {e}")
@@ -180,9 +181,10 @@ async def sensor_reader_task():
                 f"Pitch={pitch}° Roll={roll}°  Orient={orient}"
             )
 
-            # Post reading to backend
+            # Post reading to backend (in background thread to avoid blocking event loop)
             try:
-                response = post_reading(
+                response = await asyncio.to_thread(
+                    post_reading,
                     DEVICE_ID,
                     temperature=temperature,
                     ph=ph,
@@ -215,8 +217,8 @@ async def main():
     # Start sensor reader
     asyncio.create_task(sensor_reader_task())
 
-    # Get LiveKit token
-    resp = requests.get(TOKEN_URL)
+    # Get LiveKit token (in background thread to avoid blocking event loop)
+    resp = await asyncio.to_thread(requests.get, TOKEN_URL)
     data = resp.json()
     token = data["token"]
 
